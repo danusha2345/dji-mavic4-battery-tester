@@ -10,3 +10,9 @@ esp32_tester/.vscode/
 # editor / OS
 *.swp
 .DS_Store
+
+# СЕКРЕТЫ — не коммитить! (DJI App Key и т.п.)
+photo_2026-05-30_18-38-19.jpg
+*secret*
+*appkey*
+*.bmp

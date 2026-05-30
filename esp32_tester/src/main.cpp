@@ -153,7 +153,7 @@ static bool poll() {
   n = sendRecv(0x0d, 0x02, PL1, 1, p, sizeof p, seq++);   // динамика
   if (n >= 22) {
     nb.ok = true; nb.packMv = u16(p, 2); nb.rawSoc = p[3]; nb.current = s32(p, 6);
-    nb.fcc = u16(p, 10); nb.remain = u32(p, 14); nb.temp = u16(p, 18) / 10.0f;
+    nb.fcc = u16(p, 10); nb.remain = u32(p, 14); nb.temp = (int16_t)u16(p, 18) / 10.0f;  // i16 ÷10 (signed: ниже 0°C)
     nb.ncell = p[20]; nb.soc = p[21];
   } else return false;
   n = sendRecv(0x0d, 0x03, PL_CELLS, 4, p, sizeof p, seq++); // банки (для отображения)
@@ -224,12 +224,11 @@ static void drawValues() {
   }
   // напряжение пакета (прямое поле гейджа 0d:02[2])
   value(6, 216, 234, WHITE, 2, "Pack %d.%03dV", B.packMv / 1000, B.packMv % 1000);
-  // прошивка (сырой 8-байтный дескриптор — формат ещё уточняем)
-  if (B.fwOk) {
-    char hb[20]; int o = 0;
-    for (int k = 0; k < 8; k++) o += snprintf(hb + o, sizeof(hb) - o, "%02X", B.fw[k]);
-    value(6, 244, 234, CYAN, 1, "FW %s", hb);
-  } else value(6, 244, 234, DARKGREY, 1, "FW ?");
+  // прошивка батареи: дескриптор -> vNN.N.N.NN (формат сверен с FDR-логом Mavic 4)
+  if (B.fwOk)
+    value(6, 244, 234, CYAN, 2, "FW v%d.%d.%d.%d", B.fw[7], B.fw[6], B.fw[5], B.fw[4]);
+  else
+    value(6, 244, 234, DARKGREY, 1, "FW ?");
 }
 
 // ---- встроенный LiPo платы: сглаженная полоска-индикатор снизу ----
@@ -300,8 +299,9 @@ void loop() {
     drawValues();
     drawBatBar();                             // полоска заряда контроллера
     if (got)
-      Serial.printf("SoC=%d%% I=%ldmA T=%.1fC %dS pack=%dmV cyc=%d FCC=%d %s %s\n",
-                    B.soc, (long)B.current, B.temp, B.ncell, B.packMv, B.cycles, B.fcc, B.model, B.sn);
+      Serial.printf("SoC=%d%% I=%ldmA T=%.1fC %dS pack=%dmV cyc=%d FCC=%d FW v%d.%d.%d.%d %s %s\n",
+                    B.soc, (long)B.current, B.temp, B.ncell, B.packMv, B.cycles, B.fcc,
+                    B.fw[7], B.fw[6], B.fw[5], B.fw[4], B.model, B.sn);
     else
       Serial.println("нет ответа батареи (проверь TX/RX/GND)");
   }
