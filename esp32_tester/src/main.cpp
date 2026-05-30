@@ -6,6 +6,8 @@
  */
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
+#include "esp_sleep.h"
+#include "driver/rtc_io.h"
 
 // ---------- цвета RGB565 (эта версия GFX их не объявляет) ----------
 #define BLACK    0x0000
@@ -28,6 +30,10 @@
 #define BAT_TX   43   // -> RX батареи
 #define BAT_RX   44   // <- TX батареи
 #define BAT_BAUD 115200
+// ---------- кнопка питания + ADC встроенного LiPo платы ----------
+#define BTN_PWR     18       // тактовая кнопка: GPIO18 -> кнопка -> GND (выведен на гребёнку)
+#define PWR_HOLD_MS 1200     // удержание кнопки для выключения
+#define BAT_ADC_PIN 5        // BAT_ADC, делитель VBAT/3 (R19 200K / R20 100K)
 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI, GFX_NOT_DEFINED);
 Arduino_GFX *gfx = new Arduino_ST7789(bus, LCD_RST, 0 /*rot*/, true /*IPS*/, 240, 320);
@@ -226,24 +232,78 @@ static void drawValues() {
   } else value(6, 244, 234, DARKGREY, 1, "FW ?");
 }
 
+// ---- встроенный LiPo платы: сглаженная полоска-индикатор снизу ----
+// Как в офиц. демо Waveshare: BAT_ADC через делитель 200K/100K (÷3) -> напряжение.
+// Статуса заряда на плате нет на GPIO (STAT только на красном LED) — показываем уровень.
+static void drawBatBar() {
+  static float ema = 0;
+  uint32_t s = 0;
+  for (int i = 0; i < 16; i++) s += analogReadMilliVolts(BAT_ADC_PIN);
+  int raw = (int)(s / 16) * 3;                 // делитель VBAT/3
+  if (ema < 1) ema = raw;
+  ema = ema * 0.9f + raw * 0.1f;               // сглаживание (фикс дёрганья)
+  int mv = (int)ema;
+  int pct = (mv - 3300) * 100 / 900;           // 3.30В=0%, 4.20В=100%
+  if (pct < 0) pct = 0; if (pct > 100) pct = 100;
+  uint16_t c = pct >= 50 ? GREEN : (pct >= 20 ? YELLOW : RED);
+  char b[28]; snprintf(b, sizeof b, "Tester batt: %d.%02dV  %d%%", mv / 1000, (mv % 1000) / 10, pct);
+  gfx->fillRect(0, 292, 240, 10, BLACK);
+  gfx->setTextSize(1); gfx->setTextColor(DARKGREY); gfx->setCursor(6, 294); gfx->print(b);
+  int x = 2, y = 308, w = 236, h = 10;
+  gfx->drawRect(x, y, w, h, DARKGREY);
+  gfx->fillRect(x + 1, y + 1, w - 2, h - 2, BLACK);
+  gfx->fillRect(x + 1, y + 1, (w - 2) * pct / 100, h - 2, c);
+}
+
+// ---- мягкое выключение: deep sleep, пробуждение по кнопке ----
+static void powerOff() {
+  gfx->fillScreen(BLACK);
+  gfx->setTextSize(3); gfx->setTextColor(WHITE); gfx->setCursor(72, 140);
+  gfx->print("OFF");
+  delay(500);
+  digitalWrite(LCD_BL, LOW);                   // погасить подсветку (главный потребитель)
+  gpio_hold_en((gpio_num_t)LCD_BL);            // держать LOW во сне
+  gpio_deep_sleep_hold_en();
+  while (digitalRead(BTN_PWR) == LOW) delay(10);   // дождаться отпускания
+  delay(50);
+  rtc_gpio_pullup_en((gpio_num_t)BTN_PWR);     // подтяжка кнопки во сне
+  rtc_gpio_pulldown_dis((gpio_num_t)BTN_PWR);
+  esp_sleep_enable_ext1_wakeup(1ULL << BTN_PWR, ESP_EXT1_WAKEUP_ANY_LOW);
+  esp_deep_sleep_start();                        // ~десятки мкА; включение — нажатием кнопки
+}
+
 void setup() {
   Serial.begin(115200);                       // USB-CDC лог
+  setCpuFrequencyMhz(80);                     // ниже активное потребление
+  pinMode(BTN_PWR, INPUT_PULLUP);
+  gpio_hold_dis((gpio_num_t)LCD_BL);          // снять фиксацию подсветки после сна
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1)
+    while (digitalRead(BTN_PWR) == LOW) delay(10);   // дождаться отпускания кнопки включения
   pinMode(LCD_BL, OUTPUT); digitalWrite(LCD_BL, HIGH);
+  analogReadResolution(12);
   Bat.begin(BAT_BAUD, SERIAL_8N1, BAT_RX, BAT_TX);
   gfx->begin();
   drawStatic();
 }
 
-uint32_t lastPoll = 0;
+uint32_t lastPoll = 0, btnDownAt = 0;
 void loop() {
-  if (millis() - lastPoll > 500) {
+  // кнопка питания: длинное удержание -> выключение (deep sleep)
+  if (digitalRead(BTN_PWR) == LOW) {
+    if (!btnDownAt) btnDownAt = millis();
+    else if (millis() - btnDownAt > PWR_HOLD_MS) powerOff();
+  } else btnDownAt = 0;
+
+  if (millis() - lastPoll > 1000) {           // опрос 1 Гц (экономия)
     lastPoll = millis();
     bool got = poll();
     drawValues();
+    drawBatBar();                             // полоска заряда контроллера
     if (got)
       Serial.printf("SoC=%d%% I=%ldmA T=%.1fC %dS pack=%dmV cyc=%d FCC=%d %s %s\n",
                     B.soc, (long)B.current, B.temp, B.ncell, B.packMv, B.cycles, B.fcc, B.model, B.sn);
     else
       Serial.println("нет ответа батареи (проверь TX/RX/GND)");
   }
+  delay(20);                                  // не крутить CPU вхолостую (экономия + отзыв кнопки)
 }

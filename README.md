@@ -12,6 +12,10 @@ The battery's fuel-gauge MCU is always powered from the cells, so **it answers o
 when the battery is "off"** — no button, no drone, no hub. Three wires (RX/TX/GND) and you read
 state of charge, per-cell voltages, cycles, temperature, capacities, serial number and more.
 
+| ESP32 tester reading a DJI Mavic 4 Pro battery | UART tap into the battery contacts (TX / RX / GND) |
+|:--:|:--:|
+| ![ESP32 tester dashboard: SoC, cells, cycles, pack voltage](photo_2026-05-30_17-41-34.jpg) | ![UART wiring into the battery](photo_2026-05-30_17-41-57.jpg) |
+
 > ⚠️ For your **own** batteries and authorized research/repair only. You talk to the gauge at your
 > own risk. Read-only polling is safe; do not blindly send unknown write/config commands.
 
@@ -80,6 +84,12 @@ python3 -m venv --system-site-packages .venv
 ### ESP32 tester (Waveshare ESP32-S3-Touch-LCD-2)
 LCD ST7789T3 240×320. Battery on the silk **TX/RX** header (UART0 pins, free because flashing/console
 go over USB-C). Shows: SoC %, cycles, temperature, per-cell mV, pack voltage, serial, firmware.
+
+**Power & low power:** tactile button on **GPIO18** (`GPIO18 → button → GND`): hold ≈1.2 s = off
+(deep sleep), press = on (wake). Plus 1 Hz polling and 80 MHz CPU, backlight off in sleep, and a bottom
+bar for the tester's own LiPo (BAT_ADC GPIO5, ÷3 divider). Note: the board's red **POWER** LED is wired
+to the 3.3 V rail through R22 (not a GPIO), so it stays lit in deep sleep (~0.5 mA) — desolder LED2/R22
+(or add a hardware load switch) for a truly low-power off.
 
 ```bash
 cd esp32_tester
@@ -177,6 +187,12 @@ python3 -m venv --system-site-packages .venv
 ### Тестер на ESP32 (Waveshare ESP32-S3-Touch-LCD-2)
 LCD ST7789T3 240×320. Батарея на силк-пины **TX/RX** (пины UART0 свободны — прошивка/консоль идут по USB-C).
 Показывает: SoC %, циклы, температуру, банки в мВ, напряжение пакета, серийник, прошивку.
+
+**Питание и энергосбережение:** тактовая кнопка на **GPIO18** (`GPIO18 → кнопка → GND`): удержание ≈1.2 с =
+выкл (deep sleep), нажатие = вкл (пробуждение). Плюс опрос 1 Гц и CPU 80 МГц, подсветка off во сне, снизу —
+полоска заряда встроенного LiPo (BAT_ADC GPIO5, делитель ÷3). Замечание: красный **POWER**-светодиод платы
+жёстко висит на рельсе 3.3 В через R22 (не GPIO), поэтому во сне горит (~0.5 мА) — для настоящего «выкл»
+выпаять LED2/R22 (или поставить аппаратный load switch).
 
 ```bash
 cd esp32_tester
