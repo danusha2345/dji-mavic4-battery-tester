@@ -1,0 +1,12 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# PlatformIO (ESP32 firmware build artifacts)
+esp32_tester/.pio/
+esp32_tester/.vscode/
+
+# editor / OS
+*.swp
+.DS_Store
